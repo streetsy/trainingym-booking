@@ -1,7 +1,12 @@
-# Days and exact name of the activity as it appears in the Trainingym app
-lunes:
-  - activity: "Pilates"
-miercoles:
-  - activity: "Pilates"
 viernes:
-  - activity: "Pilates"
+  desde: "09AM"
+  hasta: "12PM"
+  activity: "Pilates"
+domingo:
+  desde: "09AM"
+  hasta: "12PM"
+  activity: "Pilates"
+martes:
+  desde: "09AM"
+  hasta: "12PM"
+  activity: "Pilates"
