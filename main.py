@@ -1,48 +1,36 @@
-import os
-from datetime import datetime, time
-from api import TraininGym, Dias
+import sys
+from datetime import datetime
+import yaml
+from api import Trainingym, Dias
+
+def load_yaml():
+    with open("clases.yaml", "r") as stream:
+        try:
+            data = yaml.safe_load(stream)
+        except yaml.YAMLError as exc:
+            print(exc)
+            sys.exit(1)
+
+    activities = {}
+    for dia in Dias:
+        if dia.name in data and data[dia.name] is not None:
+            activities[dia.value] = {}
+            activities[dia.value]["start_time"] = datetime.strptime(data[dia.name].get("desde"), "%I%p").time()
+            activities[dia.value]["end_time"] = datetime.strptime(data[dia.name].get("hasta"), "%I%p").time()
+            
+            # This line caused the crash! It expects a string or a structure under 'activity'
+            activities[dia.value]["activities"] = data[dia.name].get("activity")
+
+    return activities
 
 def main():
-    # 1. Initialize the API using the dynamically generated config file
-    trainingym = TraininGym("config.yaml")
-    
-    # 2. Login to the backend
+    trainingym = Trainingym("config.yaml")
     trainingym.login()
     
-    # 3. Pull the live available class list from Centro Fitness Benalmádena
     activities = trainingym.get_activities()
-    print("Next activities found:")
-    for key in activities:
-        for act in activities[key]:
-            print(f"- {act.get('name')} on {act.get('date')} at {act.get('hour')} (ID: {act.get('id')})")
+    want_list = load_yaml()
 
-    # 4. Filter and book target classes directly, bypassing broken yaml parsing
-    # Target days mapped to 72 hours early execution:
-    # Tuesday books Friday, Friday books Monday, Sunday books Wednesday.
-    current_day = datetime.now().strftime('%A').lower() # e.g., 'tuesday', 'friday', 'sunday'
-    
-    # Map target strings matching the gym's database names
-    target_class_name = "pilates"
-    
-    booked_any = False
-    for day_id, day_activities in activities.items():
-        for act in day_activities:
-            act_name = act.get("name", "").lower()
-            act_id = act.get("id")
-            
-            # If the activity contains "pilates", attempt booking immediately
-            if target_class_name in act_name and act_id:
-                print(f"Target class found! Attempting to book: {act.get('name')} (ID: {act_id})")
-                try:
-                    # Target the internal booking mechanism directly
-                    res = trainingym.book(act_id)
-                    print(f"Server response: {res}")
-                    booked_any = True
-                except Exception as e:
-                    print(f"Booking attempt complete or status checked: {e}")
-
-    if not booked_any:
-        print("No match found or booking window not open for target class yet.")
+    trainingym.book_activities(want_list)
 
 if __name__ == '__main__':
     main()
