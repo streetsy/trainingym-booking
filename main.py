@@ -72,17 +72,18 @@ def main():
     print("Next activities:")
     print_activities(trainingym.next_activities())
 
-    # --- ADDED ONLY THIS BLOCK TO SAFELY PRINT SATURDAY ---
+        # --- ADDED ONLY THIS BLOCK TO SAFELY PRINT THE ENTIRE SCHEDULE ---
     try:
-        print("\n--- AVAILABLE ON SATURDAY ---")
+        print("\n--- RAW GYM DATA PAYLOAD ---")
         all_schedules = trainingym.getSchedulesApp()
-        saturday_id = 5  # Internal day index for Saturday
-        saturday_classes = all_schedules.get(saturday_id, [])
-        for act in saturday_classes:
-            print(f"Class: {act.get('name')} | Time: {act.get('hour')} | ID: {act.get('id')}")
+        # This loops through whatever keys the gym uses (numbers or text)
+        for day_key, classes_list in all_schedules.items():
+            print(f"\n[Day Identifier: {day_key}]")
+            for act in classes_list:
+                print(f"  Class: {act.get('name')} | Time: {act.get('hour')} | ID: {act.get('id')}")
         print("--------------------------------\n")
     except Exception as e:
-        print(f"Could not retrieve Saturday classes directly: {e}")
+        print(f"Could not retrieve raw payload: {e}")
     # ------------------------------------------------------
 
     want_list = load_yaml()
