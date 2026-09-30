@@ -2,7 +2,7 @@ name: Gym Booking Automation
 
 on:
   schedule:
-    - cron: '30 8 * * 2,5,0'
+    - cron: '15 8 * * *'
   workflow_dispatch: # Allows you to trigger it manually for testing
 
 jobs:
