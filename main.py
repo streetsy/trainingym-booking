@@ -77,5 +77,16 @@ def main():
     #return
     trainingym.book_activities(want_list)
 
+    # --- ADDED ONLY THIS BLOCK TO CONFIRM BOOKINGS IN THE SAME LOG ---
+    # Clear the internal cache to ensure we pull fresh data from the gym
+    trainingym.myBookings.cache_clear()
+    
+    # Wait 2 seconds to let the gym backend complete the registration update
+    sleep(2)
+    
+    print("\nConfirmed Bookings after execution:")
+    print_activities(trainingym.next_activities())
+    # -----------------------------------------------------------------
+
 if __name__ == "__main__":
     main()
