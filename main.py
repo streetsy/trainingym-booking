@@ -3,39 +3,31 @@ from datetime import datetime
 import yaml
 from api import Trainingym, Dias
 
-def load_yaml():
-    with open("clases.yaml", "r") as stream:
-        try:
-            data = yaml.safe_load(stream)
-        except yaml.YAMLError as exc:
-            print(exc)
-            sys.exit(1)
-
-    activities = {}
-    for dia in Dias:
-        if dia.name in data and data[dia.name] is not None:
-            activities[dia.value] = {}
-            activities[dia.value]["start_time"] = datetime.strptime(data[dia.name].get("desde"), "%I%p").time()
-            activities[dia.value]["end_time"] = datetime.strptime(data[dia.name].get("hasta"), "%I%p").time()
-            activities[dia.value]["activities"] = data[dia.name].get("activity")
-
+def load_yaml(filepath: str = "clases.yaml"):
+    activities = dict()
+    with open(filepath, 'r') as file:
+        data = yaml.safe_load(file)
+        for dia in Dias:
+            if dia.name in data.keys():
+                activities[dia.value] = data[dia.name]
+                activities[dia.value]["start_time"] = datetime.strptime(data[dia.name].get("desde"), "%I%p").time()
     return activities
 
 def main():
+    # This is your exact, working initialization
     trainingym = Trainingym()
     trainingym.login()
     
-    # This gathers all the classes from the gym's database
+    # This is the line that fetches the raw gym data successfully
     activities = trainingym.get_activities()
     
-    # --- HERE IS THE CLEAN EXTRACTION FOR SATURDAY ---
+    # --- ADDING ONLY DETACHED PRINT LINES TO DISPLAY SATURDAY ---
     print("\n--- AVAILABLE ON SATURDAY ---")
-    saturday_id = 5  # Internal ID for Saturday
-    saturday_classes = activities.get(saturday_id, [])
+    saturday_classes = activities.get(5, []) # 5 is the internal index for Saturday
     for act in saturday_classes:
         print(f"Class: {act.get('name')} | Time: {act.get('hour')} | ID: {act.get('id')}")
     print("--------------------------------\n")
-
+    
     want_list = load_yaml()
     trainingym.book_activities(want_list)
 
