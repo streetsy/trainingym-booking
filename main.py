@@ -72,19 +72,15 @@ def main():
     print("Next activities:")
     print_activities(trainingym.next_activities())
 
-    # --- ADDED ONLY THIS BLOCK TO SAFELY FILTER NEXT ACTIVITIES FOR SATURDAY ---
+        # --- ADDED ONLY THIS BLOCK TO SAFELY EXTRACT SATURDAY BY DAY MAPPING ---
     try:
         print("\n--- AVAILABLE ON SATURDAY ---")
-        upcoming = trainingym.next_activities()
-        found_saturday = False
-        for act in upcoming:
-            # Check if the class date falls on a Saturday (weekday number 5)
-            if act["date"].weekday() == 5:
-                date_str = act["date"].strftime("%Y-%m-%d %H:%M")
-                print(f"Class: {act['name']} | Time: {date_str} | ID: {act['id']}")
-                found_saturday = True
-        if not found_saturday:
-            print("No Saturday classes found in the upcoming schedule list.")
+        # In api.py, Dias.sabado maps to the Saturday schedule database filter
+        saturday_schedule = trainingym.get_activities().get(Dias.sabado.value, [])
+        if not saturday_schedule:
+            print("No activities returned for Saturday in this data block.")
+        for act in saturday_schedule:
+            print(f"Class: {act.get('name')} | Time: {act.get('hour')} | ID: {act.get('id')}")
         print("--------------------------------\n")
     except Exception as e:
         print(f"Could not retrieve Saturday schedule: {e}")
