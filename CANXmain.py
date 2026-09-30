@@ -84,6 +84,10 @@ def main():
 
     # Clear cache and verify current state
     trainingym.myBookings.cache_clear()
+    
+    # Wait 2 seconds to let the gym backend complete the registration update
+    sleep(2)
+    
     print("\nNext activities after cancellation:")
     print_activities(trainingym.next_activities())
 
