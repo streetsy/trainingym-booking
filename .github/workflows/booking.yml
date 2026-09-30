@@ -1,0 +1,32 @@
+name: Gym Booking Automation
+
+on:
+  schedule:
+    - cron: '28 8 * * 2,5,0' # Runs at 08:28 UTC (10:28 AM Spanish time) on Sun, Tue, Thu
+  workflow_dispatch: # Allows you to trigger it manually for testing
+
+jobs:
+  book:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests pyyaml
+
+    - name: Create Temporary Config File
+      run: |
+        echo "email: '${{ secrets.TRAININGYM_EMAIL }}'" > config.yaml
+        echo "password: '${{ secrets.TRAININGYM_PASSWORD }}'" >> config.yaml
+
+    - name: Run booking script
+      run: python main.py
