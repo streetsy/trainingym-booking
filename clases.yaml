@@ -1,0 +1,7 @@
+# Days and exact name of the activity as it appears in the Trainingym app
+lunes:
+  - activity: "Pilates"
+miercoles:
+  - activity: "Pilates"
+viernes:
+  - activity: "Pilates"
