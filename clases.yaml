@@ -1,15 +1,12 @@
+lunes:
+  desde: 10am
+  clases:
+    - pilates
+miercoles:
+  desde: 10am
+  clases:
+    - pilates
 viernes:
-  desde: "09AM"
-  hasta: "12PM"
+  desde: 10am
   clases:
-    - "pilates"
-domingo:
-  desde: "09AM"
-  hasta: "12PM"
-  clases:
-    - "pilates"
-martes:
-  desde: "09AM"
-  hasta: "12PM"
-  clases:
-    - "pilates"
+    - pilates
