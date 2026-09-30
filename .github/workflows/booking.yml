@@ -2,7 +2,7 @@ name: Gym Booking Automation
 
 on:
   schedule:
-    - cron: '28 8 * * 2,5,0' # Runs at 08:28 UTC (10:28 AM Spanish time) on Sun, Tue, Thu
+    - cron: '30 8 * * 2,5,0'
   workflow_dispatch: # Allows you to trigger it manually for testing
 
 jobs:
