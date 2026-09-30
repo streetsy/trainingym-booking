@@ -72,18 +72,22 @@ def main():
     print("Next activities:")
     print_activities(trainingym.next_activities())
 
-        # --- ADDED ONLY THIS BLOCK TO SAFELY PRINT THE ENTIRE SCHEDULE ---
+    # --- ADDED ONLY THIS BLOCK TO SAFELY FILTER NEXT ACTIVITIES FOR SATURDAY ---
     try:
-        print("\n--- RAW GYM DATA PAYLOAD ---")
-        all_schedules = trainingym.getSchedulesApp()
-        # This loops through whatever keys the gym uses (numbers or text)
-        for day_key, classes_list in all_schedules.items():
-            print(f"\n[Day Identifier: {day_key}]")
-            for act in classes_list:
-                print(f"  Class: {act.get('name')} | Time: {act.get('hour')} | ID: {act.get('id')}")
+        print("\n--- AVAILABLE ON SATURDAY ---")
+        upcoming = trainingym.next_activities()
+        found_saturday = False
+        for act in upcoming:
+            # Check if the class date falls on a Saturday (weekday number 5)
+            if act["date"].weekday() == 5:
+                date_str = act["date"].strftime("%Y-%m-%d %H:%M")
+                print(f"Class: {act['name']} | Time: {date_str} | ID: {act['id']}")
+                found_saturday = True
+        if not found_saturday:
+            print("No Saturday classes found in the upcoming schedule list.")
         print("--------------------------------\n")
     except Exception as e:
-        print(f"Could not retrieve raw payload: {e}")
+        print(f"Could not retrieve Saturday schedule: {e}")
     # ------------------------------------------------------
 
     want_list = load_yaml()
