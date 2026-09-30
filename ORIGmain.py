@@ -69,8 +69,11 @@ def main():
     trainingym.login(args.email, args.password)
     print(f"Welcome {trainingym.person_fullname} !")
 
-    print("Next activities:")
-    print_activities(trainingym.next_activities())
+    #print("Next activities:")
+    #print_activities(trainingym.next_activities())
+
+    # We fetch the starting activities in the background, but do NOT print them anymore
+    trainingym.next_activities()
 
     want_list = load_yaml()
     #print(json.dumps(trainingym.getSchedulesApp()))
