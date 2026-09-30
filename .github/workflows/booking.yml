@@ -27,6 +27,8 @@ jobs:
       run: |
         echo "email: '${{ secrets.TRAININGYM_EMAIL }}'" > config.yaml
         echo "password: '${{ secrets.TRAININGYM_PASSWORD }}'" >> config.yaml
+        echo "telegram: ${{ secrets.TELEGRAM_TO }}" >> config.yaml
+        echo "telegram_bot: '${{ secrets.TELEGRAM_TOKEN }}'" >> config.yaml
 
-    - name: Run booking script
-      run: python main.py
+    - name: Run booking script and send alert
+      run: python main.py | python send.py
