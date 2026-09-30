@@ -1,15 +1,20 @@
 import sys
+import os
 from api import Trainingym
 
 def main():
-    # 1. Log in safely
-    trainingym = Trainingym()
-    trainingym.login()
+    # 1. Pull the secrets securely from the workflow environment
+    email = os.environ.get("TRAININGYM_EMAIL")
+    password = os.environ.get("TRAININGYM_PASSWORD")
     
-    # 2. Fetch the activities payload
+    # 2. Initialize and log in correctly passing the credentials
+    trainingym = Trainingym()
+    trainingym.login(email, password)
+    
+    # 3. Fetch the activities payload
     activities = trainingym.get_activities()
     
-    # 3. Pull Saturday's list (Saturday is internal ID 5)
+    # 4. Pull Saturday's list (Saturday is internal ID 5)
     saturday_classes = activities.get(5, [])
     
     print("\n--- AVAILABLE ON SATURDAY ---")
