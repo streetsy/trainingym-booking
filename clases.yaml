@@ -1,12 +1,12 @@
 viernes:
   desde: "09AM"
   hasta: "12PM"
-  activity: "pilates"
+  activity: ["pilates"]
 domingo:
   desde: "09AM"
   hasta: "12PM"
-  activity: "pilates"
+  activity: ["pilates"]
 martes:
   desde: "09AM"
   hasta: "12PM"
-  activity: "pilates"
+  activity: ["pilates"]
