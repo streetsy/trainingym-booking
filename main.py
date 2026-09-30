@@ -1,29 +1,43 @@
 import sys
-import os
-from api import Trainingym
+from datetime import datetime
+import yaml
+from api import Trainingym, Dias
+
+def load_yaml():
+    with open("clases.yaml", "r") as stream:
+        try:
+            data = yaml.safe_load(stream)
+        except yaml.YAMLError as exc:
+            print(exc)
+            sys.exit(1)
+
+    activities = {}
+    for dia in Dias:
+        if dia.name in data and data[dia.name] is not None:
+            activities[dia.value] = {}
+            activities[dia.value]["start_time"] = datetime.strptime(data[dia.name].get("desde"), "%I%p").time()
+            activities[dia.value]["end_time"] = datetime.strptime(data[dia.name].get("hasta"), "%I%p").time()
+            activities[dia.value]["activities"] = data[dia.name].get("activity")
+
+    return activities
 
 def main():
-    # 1. Pull the secrets securely from the workflow environment
-    email = os.environ.get("TRAININGYM_EMAIL")
-    password = os.environ.get("TRAININGYM_PASSWORD")
-    
-    # 2. Initialize and log in correctly passing the credentials
     trainingym = Trainingym()
-    trainingym.login(email, password)
+    trainingym.login()
     
-    # 3. Fetch the activities payload
+    # This gathers all the classes from the gym's database
     activities = trainingym.get_activities()
     
-    # 4. Pull Saturday's list (Saturday is internal ID 5)
-    saturday_classes = activities.get(5, [])
-    
+    # --- HERE IS THE CLEAN EXTRACTION FOR SATURDAY ---
     print("\n--- AVAILABLE ON SATURDAY ---")
-    if not saturday_classes:
-        print("No activities found for Saturday.")
-        sys.exit(0)
-        
+    saturday_id = 5  # Internal ID for Saturday
+    saturday_classes = activities.get(saturday_id, [])
     for act in saturday_classes:
         print(f"Class: {act.get('name')} | Time: {act.get('hour')} | ID: {act.get('id')}")
+    print("--------------------------------\n")
+
+    want_list = load_yaml()
+    trainingym.book_activities(want_list)
 
 if __name__ == '__main__':
     main()
