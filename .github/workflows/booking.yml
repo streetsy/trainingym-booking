@@ -1,8 +1,8 @@
 name: Gym Booking Automation
 
 on:
-  schedule:
-    - cron: '15 8 * * *'
+  #schedule: #Removed schedule and set in GAS samba instead.
+  #  - cron: '15 8 * * *'
   workflow_dispatch: # Allows you to trigger it manually for testing
 
 jobs:
