@@ -73,7 +73,7 @@ def main():
     print_activities(trainingym.next_activities())
 
     # --- DIRECT CANCELLATION OVERRIDE ---
-    target_cancel_id = 83884612  # Saturday's Circuit Training ID
+    target_cancel_id = 80818992  # Monday's 18:00 Pilates ID
     print(f"\n> Attempting API cancellation for Activity ID: {target_cancel_id}...")
     try:
         response = trainingym.activityCancel(target_cancel_id)
