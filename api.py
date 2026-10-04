@@ -1,3 +1,4 @@
+from zoneinfo import ZoneInfo
 import requests
 import json
 from datetime import datetime, timedelta
@@ -172,7 +173,15 @@ class Trainingym:
                     continue
 
                 day_activity = datetime.combine(day_schedule, time_start)
-                if datetime.now() >= day_activity:
+                now = datetime.now(ZoneInfo("Europe/Madrid")).replace(tzinfo=None)
+                if now >= day_activity:
+                    continue
+
+                # Only the class that just opened (~72h away). Lower bound leaves ~1h
+                # slack for GitHub Actions dispatch delays; upper bound excludes anything
+                # starting more than ~15 min after the trigger time.
+                hours_until = (day_activity - now).total_seconds() / 3600
+                if not (71 <= hours_until <= 72.25):
                     continue
 
                 date_str = day_schedule.strftime("%a") + " " + time_start.strftime("%H:%M")
