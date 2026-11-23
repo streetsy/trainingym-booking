@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
 
 import argparse
-from api import Trainingym, Dias
-import logging
-import yaml
-from datetime import datetime
+import sys
+import traceback
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from time import sleep
-import json
 
-#logging.basicConfig()
-#logging.getLogger().setLevel(logging.DEBUG)
-#requests_log = logging.getLogger("requests.packages.urllib3")
-#requests_log.setLevel(logging.DEBUG)
-#requests_log.propagate = True
+import yaml
+
+from api import Trainingym, Dias, now_madrid, log
+
+# Statuses (see Trainingym.booking_attempt) after which there is nothing more to retry
+FINISHED = {"booked", "already", "full", "dry-run"}
+
+STATUS_TEXT = {
+    "booked": "✅ booked",
+    "already": "✅ already booked",
+    "full": "❌ class is full",
+    "waiting": "⏳ not bookable (never opened in time)",
+    "unconfirmed": "⚠️ booking sent but not confirmed, check the app",
+    "dry-run": "🧪 dry run, would book",
+}
+
 
 def print_activities(activities):
     msg = list()
@@ -34,62 +44,177 @@ def load_yaml(filepath: str = "clases.yaml"):
     return activities
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="Login to Trainingym app")
-    parser.add_argument("email", nargs="?", default=None, help="Email address to use for login")
-    parser.add_argument("password", nargs="?", default=None, help="Password to use for login")
+    parser = argparse.ArgumentParser(description="Book Trainingym classes for one or more members")
+    parser.add_argument("email", nargs="?", default=None, help="Email address to use for login (single member)")
+    parser.add_argument("password", nargs="?", default=None, help="Password to use for login (single member)")
     parser.add_argument("-c", "--config", default="config.yaml", help="Path to config file")
+    parser.add_argument("--classes", default="clases.yaml", help="Class wish list file (default clases.yaml); use another file for testing")
+    parser.add_argument("--interval", type=int, default=15, help="Seconds between attempts (default 15)")
+    parser.add_argument("--max-minutes", type=float, default=10, help="Stop retrying this long after booking opens (default 10)")
+    parser.add_argument("--test-any-class", action="store_true", help="Test mode: consider ANY class ~72h away, ignoring clases.yaml (combine with --dry-run to only report)")
+    parser.add_argument("--cancel-id", type=int, default=None, help="Cancel this class id for every member, then stop")
+    parser.add_argument("--dry-run", action="store_true", help="Do everything except actually sending the booking")
 
     return parser.parse_args()
 
-def load_credentials_from_config(filepath):
+def load_config(filepath):
     try:
         with open(filepath, "r") as config_file:
             config_data = yaml.safe_load(config_file)
-            if config_data is not None:
-                return config_data.get("email"), config_data.get("password")
-            else:
-                raise ValueError("Invalid YAML data in config.yaml")
+            if config_data is None:
+                raise ValueError(f"Invalid YAML data in {filepath}")
+            return config_data
     except FileNotFoundError:
-        raise FileNotFoundError("config.yaml not found")
-    except Exception as e:
-        raise ValueError(f"Error loading values from config.yaml: {e}")
+        raise FileNotFoundError(f"{filepath} not found")
+
+def load_accounts(args, config):
+    """
+    Accounts to book for. Either a list in config.yaml:
+
+        accounts:
+          - email: a@example.com
+            password: secret
+          - email: b@example.com
+            password: secret
+
+    or the old single "email:" / "password:" keys, or email + password on the command line.
+    Entries with an empty email or password are skipped.
+    """
+    if args.email and args.password:
+        accounts = [{"email": args.email, "password": args.password}]
+    elif config.get("accounts"):
+        accounts = config["accounts"]
+    else:
+        accounts = [{"email": config.get("email"), "password": config.get("password")}]
+
+    accounts = [a for a in accounts if a.get("email") and a.get("password")]
+    if not accounts:
+        raise ValueError("Missing email or password")
+    return accounts
+
+
+def wait_until(moment: datetime):
+    """ Sleep until the given Madrid time (returns immediately if it has passed) """
+    while True:
+        remaining = (moment - now_madrid()).total_seconds()
+        if remaining <= 0:
+            return
+        sleep(min(remaining, 1))
+
+
+def run_member(client: Trainingym, want_list: dict, start_at: datetime, interval: int, deadline: datetime):
+    """
+    Try to book for one member: first attempt at start_at, then one every `interval` seconds,
+    until the class is booked/full or the deadline passes. Returns (name, last results or None).
+    """
+    name = client.person_fullname
+    results = None
+    attempt = 0
+
+    while True:
+        wait_until(start_at + timedelta(seconds=attempt * interval))
+        attempt += 1
+        try:
+            results = client.booking_attempt(want_list)
+        except Exception as e:  # network hiccup etc: keep trying until the deadline
+            results = None
+            log(f"[{name}] attempt {attempt} failed: {e!r}")
+        else:
+            shown = ", ".join(f"{t['name']} {t['start']:%a %H:%M} -> {s}" for t, s in results) or "no matching class"
+            log(f"[{name}] attempt {attempt} at {now_madrid():%H:%M:%S}: {shown}")
+            if not results or all(status in FINISHED for _, status in results):
+                break
+
+        if now_madrid() + timedelta(seconds=interval) > deadline:
+            break
+
+    return name, results
+
 
 def main():
     args = parse_arguments()
+    config = load_config(args.config)
+    accounts = load_accounts(args, config)
+    want_list = load_yaml(args.classes)
 
-    if args.email is None or args.password is None:
-        email, password = load_credentials_from_config(args.config)
-        args.email = args.email or email
-        args.password = args.password or password
+    # 1. Log everyone in first, so nothing slow is left to do when booking opens
+    clients, lines = [], []
+    for account in accounts:
+        client = Trainingym()
+        client.dry_run = args.dry_run
+        client.any_class = args.test_any_class
+        try:
+            client.login(account["email"], account["password"])
+        except Exception as e:
+            log(f"Login failed for {account['email']}: {e!r}")
+            lines.append(f"❌ {account['email']}: login failed")
+            continue
+        log(f"Logged in: {client.person_fullname}")
+        clients.append(client)
 
-    if args.email is None or args.password is None:
-        raise ValueError("Missing email or password")
+    if not clients:
+        print("\n".join(lines))
+        sys.exit(1)
 
-    trainingym = Trainingym()
-    trainingym.login(args.email, args.password)
-    print(f"Welcome {trainingym.person_fullname} !")
+    if args.cancel_id:
+        for client in clients:
+            resp = client.activityCancel(args.cancel_id)
+            log(f"[{client.person_fullname}] cancel request for {args.cancel_id}: HTTP {resp.status_code}")
+        sleep(3)
+        print(f"Cancellation requested for class {args.cancel_id}")
+        for client in clients:
+            client.refresh()
+            print(f"\nBookings now for {client.person_fullname}:")
+            print_activities(client.next_activities())
+        return
 
-    #print("Next activities:")
-    #print_activities(trainingym.next_activities())
+    # 2. Work out which class has just opened, and when exactly its booking opens
+    targets = clients[0].find_target_classes(want_list)
+    if not targets:
+        print("No class from clases.yaml is opening for booking right now (nothing 71-72.25h away).")
+        if lines:
+            print("\n".join(lines))
+        return
 
-    # We fetch the starting activities in the background, but do NOT print them anymore
-    trainingym.next_activities()
+    class_text = ", ".join(sorted({f"{t['name']} {t['start']:%a %d %b %H:%M}" for t in targets}))
+    opens_at = min(t["opens"] for t in targets)
+    start_at = max(opens_at, now_madrid())
+    deadline = start_at + timedelta(minutes=args.max_minutes)
+    if opens_at > now_madrid():
+        log(f"Booking for {class_text} opens at {opens_at:%H:%M:%S}, waiting {(opens_at - now_madrid()).total_seconds():.0f}s")
+    else:
+        log(f"Booking for {class_text} already open (since {opens_at:%H:%M:%S}), starting now")
 
-    want_list = load_yaml()
-    #print(json.dumps(trainingym.getSchedulesApp()))
-    #return
-    trainingym.book_activities(want_list)
+    # 3. Everyone books at the same time, retrying every `interval` seconds
+    with ThreadPoolExecutor(max_workers=len(clients)) as pool:
+        futures = [pool.submit(run_member, c, want_list, start_at, args.interval, deadline) for c in clients]
+        outcomes = [f.result() for f in futures]
 
-    # --- ADDED ONLY THIS BLOCK TO CONFIRM BOOKINGS IN THE SAME LOG ---
-    # Clear the internal cache to ensure we pull fresh data from the gym
-    trainingym.myBookings.cache_clear()
-    
-    # Wait 2 seconds to let the gym backend complete the registration update
+    # 4. Summary (stdout -> Telegram)
+    print(f"Booking: {class_text}")
+    for name, results in outcomes:
+        if results is None:
+            lines.append(f"⚠️ {name}: error, see the Actions log")
+        elif not results:
+            lines.append(f"⚠️ {name}: class not found")
+        else:
+            for target, status in results:
+                lines.append(f"{STATUS_TEXT.get(status, status)} - {name} (class ID {target['id']})")
+    print("\n".join(lines))
+
+    # Same confirmation as before: what each member has booked now
     sleep(2)
-    
-    print("\nConfirmed Bookings after execution:")
-    print_activities(trainingym.next_activities())
-    # -----------------------------------------------------------------
+    for client in clients:
+        client.refresh()
+        print(f"\nConfirmed bookings for {client.person_fullname}:")
+        print_activities(client.next_activities())
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"❌ Booking script crashed: {e!r}")
+        traceback.print_exc()
+        sys.exit(1)

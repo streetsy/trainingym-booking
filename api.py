@@ -1,10 +1,36 @@
-from zoneinfo import ZoneInfo
-import requests
 import json
+import sys
 from datetime import datetime, timedelta
 from enum import Enum
 from functools import lru_cache
 from random import random as random_decimal
+from time import sleep
+from zoneinfo import ZoneInfo
+
+import requests
+
+# The gym works in Madrid time, but GitHub runners are UTC, so never use a bare datetime.now()
+TZ = ZoneInfo("Europe/Madrid")
+
+# Booking opens this many hours before a class starts...
+BOOKING_OPENS_HOURS = 72
+# ...and we only go for classes that are this many hours away from "now". The lower bound
+# leaves room for a late start, the upper bound excludes anything that starts later in the
+# day than the class that has just opened (e.g. an 11:30 or an afternoon class).
+WINDOW_MIN_HOURS = 71
+WINDOW_MAX_HOURS = 72.25
+
+
+def now_madrid() -> datetime:
+    """Current Madrid time as a naive datetime (comparable with the gym's class times)"""
+    return datetime.now(TZ).replace(tzinfo=None)
+
+
+def log(msg: str):
+    """Progress log. Goes to stderr (visible in the GitHub Actions log) so that stdout stays a
+    short summary that main.py pipes to Telegram."""
+    print(msg, file=sys.stderr, flush=True)
+
 
 class Dias(Enum):
     lunes = 0
@@ -26,9 +52,16 @@ class BookingState(Enum):
 
 class Trainingym:
     base_url = "https://www.trainingymapp.com/webtouch/"
-    headers = dict()
-    gym = dict()
-    session = requests.Session()
+
+    def __init__(self):
+        # Everything that belongs to one gym member lives on the instance (NOT on the class),
+        # otherwise several members would share one cookie jar and overwrite each other's login.
+        self.headers = dict()
+        self.gym = dict()
+        self.session = requests.Session()
+        self.dry_run = False
+        self.any_class = False  # test mode: ignore clases.yaml day/name/time, take whatever is ~72h away
+        self._sent = {}  # class id -> times seen "full" since we sent a booking request
 
     @property
     def person_fullname(self):
@@ -106,7 +139,7 @@ class Trainingym:
         if start_date is not None:
             raise NotImplementedError("Setting a start date is not implemented yet")
 
-        today = datetime.now().date()
+        today = now_madrid().date()
 
         start_date = str(today)
         end_date = str(today + timedelta(days=end_days))
@@ -131,7 +164,7 @@ class Trainingym:
 
     def next_activities(self):
         """ Return a list of upcoming activities. Include completed today """
-        today = datetime.now()
+        today = now_madrid()
         bookings = self.myBookings()
         activities = list()
 
@@ -151,73 +184,116 @@ class Trainingym:
         activities.sort(key=lambda x: x["date"])
         return activities
 
-    def book_activities(self, parsed_activities: dict):
-        """ Send the list of days->activites, and process if can do """
-        booked_activities = self.next_activities()
+    def refresh(self):
+        """ Forget cached gym data so the next call asks the gym again """
+        type(self).myBookings.cache_clear()
+        type(self).getSchedulesApp.cache_clear()
+
+    def find_target_classes(self, parsed_activities: dict):
+        """
+        Classes from clases.yaml that we want to book right now: right weekday, wanted name,
+        not earlier than "desde", and starting WINDOW_MIN_HOURS..WINDOW_MAX_HOURS from now
+        (i.e. the class whose booking has just opened, not a later one the same day).
+        """
+        now = now_madrid()
+        targets = []
 
         for gym_day in self.getSchedulesApp().get("calendar"):
             day_schedule = self.parse_date(gym_day["dateProgram"])
             dow = day_schedule.weekday()
             # si no haces clase ese día de la semana
-            if dow not in parsed_activities.keys():
+            if dow not in parsed_activities.keys() and not self.any_class:
                 continue
 
-            time_start_since = parsed_activities[dow].get("start_time")
-            wanted_activities = parsed_activities[dow].get("clases")
+            time_start_since = parsed_activities.get(dow, {}).get("start_time")
+            wanted_activities = parsed_activities.get(dow, {}).get("clases")
             for activity in gym_day.get("schedules"):
                 time_start = self.parse_hour(activity["timeStart"]).time()
-                if time_start < time_start_since:
-                    continue
                 name = activity["activity"].get("name")
-                if not self.check_name(name, wanted_activities):
+                if not self.any_class:
+                    if time_start < time_start_since:
+                        continue
+                    if not self.check_name(name, wanted_activities):
+                        continue
+
+                start = datetime.combine(day_schedule, time_start)
+                hours_until = (start - now).total_seconds() / 3600
+                if not (WINDOW_MIN_HOURS <= hours_until <= WINDOW_MAX_HOURS):
                     continue
 
-                day_activity = datetime.combine(day_schedule, time_start)
-                now = datetime.now(ZoneInfo("Europe/Madrid")).replace(tzinfo=None)
-                if now >= day_activity:
-                    continue
+                targets.append({
+                    "id": activity["id"],
+                    "name": name,
+                    "start": start,
+                    "opens": start - timedelta(hours=BOOKING_OPENS_HOURS),
+                    "activity": activity,
+                })
 
-                # Only the class that just opened (~72h away). Lower bound leaves ~1h
-                # slack for GitHub Actions dispatch delays; upper bound excludes anything
-                # starting more than ~15 min after the trigger time.
-                hours_until = (day_activity - now).total_seconds() / 3600
-                if not (71 <= hours_until <= 72.25):
-                    continue
+        return targets
 
-                date_str = day_schedule.strftime("%a") + " " + time_start.strftime("%H:%M")
-                booking_state = activity.get("bookingState")
-                msg = f"Found {name} on {date_str}"
+    def booking_attempt(self, parsed_activities: dict):
+        """
+        One complete pass: ask the gym for fresh data, find the target class(es) and try to
+        book each one. Returns a list of (target, status), where status is one of:
+          booked       we booked it and the gym confirmed it
+          already      it was already booked
+          full         no places left
+          waiting      booking is not open yet / not reservable (worth retrying)
+          unconfirmed  we sent the booking but the gym did not show it yet (worth retrying)
+          dry-run      dry run only, nothing was sent
+        """
+        self.refresh()
+        booked_ids = {x["id"] for x in self.next_activities()}
 
-                if (
-                    booking_state == BookingState.BOOKED or
-                    activity["id"] in [x["id"] for x in self.next_activities()]
-                ):
-                    msg += " (already booked)"
-                    #print(msg)
-                    continue
+        results = []
+        for target in self.find_target_classes(parsed_activities):
+            results.append((target, self._book_target(target, booked_ids)))
+        return results
 
-                places = activity.get("capacityAssistant", 0) - activity["bookingInfo"].get("bookedPlaces", 0)
-                if booking_state == BookingState.FULL or places <= 0:
-                    msg += " (no places available)"
-                    print(msg)
-                    continue
+    def _book_target(self, target: dict, booked_ids: set) -> str:
+        activity = target["activity"]
+        activity_id = target["id"]
+        booking_state = activity.get("bookingState")
 
-                if booking_state == BookingState.NOT_AVAILABLE:
-                    msg += " (not available)"
-                    print(msg)
-                    continue
+        if activity_id in booked_ids or booking_state == BookingState.BOOKED.value:
+            return "already"
 
-                if not activity["bookingInfo"].get("isReservable"):
-                    msg += " (not reservable)"
-                    print(msg)
-                    continue
+        info = activity.get("bookingInfo") or {}
+        capacity = activity.get("capacityAssistant")
+        places = None if capacity is None else capacity - info.get("bookedPlaces", 0)
 
-                msg += f' {activity["id"]}'
-                print(msg)
+        if booking_state == BookingState.FULL.value or (places is not None and places <= 0):
+            # If we already sent a booking, the "full" may just be our own place not showing in
+            # our bookings yet: give it a few more checks before accepting that we lost out
+            if activity_id in self._sent and self._sent[activity_id] < 3:
+                self._sent[activity_id] += 1
+                return "unconfirmed"
+            return "full"
 
-                # TODO: Trainingym does not allow booking two simultaneous classes (two sessions within same schedule)
-                print(f"> Booking activity ({places} left)")
-                self.activityBook(activity["id"])
+        if not info.get("isReservable"):
+            return "waiting"
+
+        # TODO: Trainingym does not allow booking two simultaneous classes (two sessions within same schedule)
+        if self.dry_run:
+            log(f"> DRY RUN: would book {target['name']} {target['start']:%a %H:%M} id {activity_id} ({places} left)")
+            return "dry-run"
+
+        log(f"> Booking {target['name']} {target['start']:%a %H:%M} id {activity_id} ({places} left)")
+        self.activityBook(activity_id)
+        self._sent[activity_id] = 0
+
+        # The gym processes the booking in the background, so check that it really registered
+        for _ in range(2):
+            sleep(2)
+            type(self).myBookings.cache_clear()
+            if activity_id in {x["id"] for x in self.next_activities()}:
+                return "booked"
+        return "unconfirmed"
+
+    def book_activities(self, parsed_activities: dict):
+        """ Single pass, no retries (kept for TESTmain.py). main.py uses booking_attempt() """
+        for target, status in self.booking_attempt(parsed_activities):
+            print(f"{target['name']} on {target['start']:%a %H:%M}: {status}")
 
     def check_name(self, name: str, search_in: list) -> bool:
         """ Perform name variants to check if name is inside """
@@ -235,22 +311,20 @@ class Trainingym:
         return False
 
     def cache_clear(self):
-        for name, method in vars(self).items():
-            if callable(method) and hasattr(method, 'cache_clear'):
-                method.cache_clear()
+        self.refresh()
 
 
 # https://www.trainingymapp.com/webtouch/api/viewss/menu/usuario
-# 
+#
 # https://www.trainingymapp.com/webtouch/api/ejercicios/sessionActual
-# 
+#
 # https://www.trainingymapp.com/webtouch/actividades
 # https://www.trainingymapp.com/webtouch/api/usuarios/reservas/getActivityGroups?idLanguage=6&noCache=0.24304466395171853
 # https://www.trainingymapp.com/webtouch/api/viewss/reservas/reservashorario
 # https://www.trainingymapp.com/webtouch/api/usuarios/reservas/myBookings
 # https://www.trainingymapp.com/webtouch/api/usuarios/reservas/getSchedulesApp/?startDateTime=2023-11-06&endDateTime=2023-11-11&noCache=0.9027295201678431
-# 
-# 
+#
+#
 # POST https://www.trainingymapp.com/webtouch/api/usuarios/reservas/bookTouch/60383865?noCache=0.55294557303735
 # {"connectionClientId":""}
 # POST https://www.trainingymapp.com/webtouch/api/usuarios/reservas/cancelBook/60383865?noCache=0.9921674306812154
