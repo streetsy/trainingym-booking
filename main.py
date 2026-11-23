@@ -87,7 +87,8 @@ def load_accounts(args, config):
     else:
         accounts = [{"email": config.get("email"), "password": config.get("password")}]
 
-    accounts = [a for a in accounts if a.get("email") and a.get("password")]
+    accounts = [{"email": str(a.get("email") or "").strip(), "password": str(a.get("password") or "").strip()} for a in accounts]
+    accounts = [a for a in accounts if a["email"] and a["password"]]
     if not accounts:
         raise ValueError("Missing email or password")
     return accounts
@@ -110,12 +111,17 @@ def run_member(client: Trainingym, want_list: dict, start_at: datetime, interval
     name = client.person_fullname
     results = None
     attempt = 0
+    booked_by_us = set()  # class ids this run booked itself (later attempts see them as "already")
 
     while True:
         wait_until(start_at + timedelta(seconds=attempt * interval))
         attempt += 1
         try:
             results = client.booking_attempt(want_list)
+            for t, st in results:
+                if st == "booked":
+                    booked_by_us.add(t["id"])
+            results = [(t, "booked" if st == "already" and t["id"] in booked_by_us else st) for t, st in results]
         except Exception as e:  # network hiccup etc: keep trying until the deadline
             results = None
             log(f"[{name}] attempt {attempt} failed: {e!r}")

@@ -168,11 +168,11 @@ class Trainingym:
         bookings = self.myBookings()
         activities = list()
 
-        for booking_day in bookings["aaData"]:
+        for booking_day in (bookings or {}).get("aaData") or []:
             day = self.parse_date(booking_day["dateProgram"])
             if day.date() < today.date():
                 continue
-            for data in booking_day["schedules"]:
+            for data in booking_day.get("schedules") or []:
                 fulldate = self.parse_hour(data["timeStart"], day)
                 activity = {
                     "id": data["id"],
@@ -198,7 +198,7 @@ class Trainingym:
         now = now_madrid()
         targets = []
 
-        for gym_day in self.getSchedulesApp().get("calendar"):
+        for gym_day in (self.getSchedulesApp() or {}).get("calendar") or []:
             day_schedule = self.parse_date(gym_day["dateProgram"])
             dow = day_schedule.weekday()
             # si no haces clase ese día de la semana
@@ -207,7 +207,7 @@ class Trainingym:
 
             time_start_since = parsed_activities.get(dow, {}).get("start_time")
             wanted_activities = parsed_activities.get(dow, {}).get("clases")
-            for activity in gym_day.get("schedules"):
+            for activity in gym_day.get("schedules") or []:
                 time_start = self.parse_hour(activity["timeStart"]).time()
                 name = activity["activity"].get("name")
                 if not self.any_class:
