@@ -53,6 +53,7 @@ def parse_arguments():
     parser.add_argument("--max-minutes", type=float, default=10, help="Stop retrying this long after booking opens (default 10)")
     parser.add_argument("--test-any-class", action="store_true", help="Test mode: consider ANY class ~72h away, ignoring clases.yaml (combine with --dry-run to only report)")
     parser.add_argument("--cancel-id", type=int, default=None, help="Cancel this class id for every member, then stop")
+    parser.add_argument("--window", default=None, help='Test only: hours-from-now window to look at, e.g. "45-55" (normal runs use 71-72.25)')
     parser.add_argument("--dry-run", action="store_true", help="Do everything except actually sending the booking")
 
     return parser.parse_args()
@@ -152,6 +153,8 @@ def main():
         client = Trainingym()
         client.dry_run = args.dry_run
         client.any_class = args.test_any_class
+        if args.window:
+            client.window_min, client.window_max = (float(x) for x in args.window.split("-"))
         try:
             client.login(account["email"], account["password"])
         except Exception as e:
@@ -180,7 +183,7 @@ def main():
     # 2. Work out which class has just opened, and when exactly its booking opens
     targets = clients[0].find_target_classes(want_list)
     if not targets:
-        print("No class from clases.yaml is opening for booking right now (nothing 71-72.25h away).")
+        print(f"No class from clases.yaml is opening for booking right now (nothing {clients[0].window_min:g}-{clients[0].window_max:g}h away).")
         if lines:
             print("\n".join(lines))
         return

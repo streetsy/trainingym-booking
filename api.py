@@ -60,6 +60,8 @@ class Trainingym:
         self.gym = dict()
         self.session = requests.Session()
         self.dry_run = False
+        self.window_min = WINDOW_MIN_HOURS  # only classes starting this many hours from now...
+        self.window_max = WINDOW_MAX_HOURS  # ...to this many (test runs can widen it)
         self.any_class = False  # test mode: ignore clases.yaml day/name/time, take whatever is ~72h away
         self._sent = {}  # class id -> times seen "full" since we sent a booking request
 
@@ -228,7 +230,7 @@ class Trainingym:
 
                 start = datetime.combine(day_schedule, time_start)
                 hours_until = (start - now).total_seconds() / 3600
-                if not (WINDOW_MIN_HOURS <= hours_until <= WINDOW_MAX_HOURS):
+                if not (self.window_min <= hours_until <= self.window_max):
                     continue
 
                 targets.append({
