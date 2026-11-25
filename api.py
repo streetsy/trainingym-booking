@@ -62,6 +62,7 @@ class Trainingym:
         self.dry_run = False
         self.window_min = WINDOW_MIN_HOURS  # only classes starting this many hours from now...
         self.window_max = WINDOW_MAX_HOURS  # ...to this many (test runs can widen it)
+        self.only_id = None     # test mode: restrict to this single class id
         self.any_class = False  # test mode: ignore clases.yaml day/name/time, take whatever is ~72h away
         self._sent = {}  # class id -> times seen "full" since we sent a booking request
 
@@ -220,6 +221,8 @@ class Trainingym:
             time_start_since = parsed_activities.get(dow, {}).get("start_time")
             wanted_activities = parsed_activities.get(dow, {}).get("clases")
             for activity in gym_day.get("schedules") or []:
+                if self.only_id and activity["id"] != self.only_id:
+                    continue
                 time_start = self.parse_hour(activity["timeStart"]).time()
                 name = activity["activity"].get("name")
                 if not self.any_class:
@@ -233,7 +236,10 @@ class Trainingym:
                 if not (self.window_min <= hours_until <= self.window_max):
                     continue
 
+                info = activity.get("bookingInfo") or {}
+                capacity = activity.get("capacityAssistant")
                 targets.append({
+                    "places": None if capacity is None else capacity - info.get("bookedPlaces", 0),
                     "id": activity["id"],
                     "name": name,
                     "start": start,
