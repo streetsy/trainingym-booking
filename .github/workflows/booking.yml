@@ -13,6 +13,10 @@ on:
         description: "TEST: use ANY class ~72h away (ignores clases.yaml). Books for real unless dry run is also ticked"
         type: boolean
         default: false
+      window_hours:
+        description: "TEST ONLY: look at classes this many hours away, e.g. 45-55. Leave EMPTY normally"
+        type: string
+        default: ""
       cancel_class_id:
         description: "CANCEL: class ID (from the Telegram message) to cancel for all members. Leave empty normally"
         type: string
@@ -57,6 +61,8 @@ jobs:
         ARGS=""
         if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="--dry-run"; fi
         if [ "${{ inputs.test_any_class }}" = "true" ]; then ARGS="$ARGS --test-any-class"; fi
+        WINDOW="${{ inputs.window_hours }}"
+        if [ -n "$WINDOW" ]; then ARGS="$ARGS --window $WINDOW"; fi
         CANCEL_ID="${{ inputs.cancel_class_id }}"
         if [ -n "$CANCEL_ID" ]; then ARGS="--cancel-id $CANCEL_ID"; fi
         python main.py $ARGS | python send.py
