@@ -76,4 +76,4 @@ jobs:
         if [ -n "$ONLY" ]; then ARGS="$ARGS --only-id $ONLY"; fi
         CANCEL_ID="${{ inputs.cancel_class_id }}"
         if [ -n "$CANCEL_ID" ]; then ARGS="--cancel-id $CANCEL_ID"; fi
-        python main.py $ARGS | python send.py
+        python main.py $ARGS --interval 10 | python send.py
