@@ -103,7 +103,7 @@ def wait_until(moment: datetime):
         sleep(min(remaining, 1))
 
 
-def run_member(client: Trainingym, want_list: dict, start_at: datetime, interval: int, deadline: datetime):
+def run_member(client: Trainingym, want_list: dict, expected_ids: set, start_at: datetime, interval: int, deadline: datetime):
     """
     Try to book for one member: first attempt at start_at, then one every `interval` seconds,
     until the class is booked/full or the deadline passes. Returns (name, last results or None).
@@ -128,8 +128,11 @@ def run_member(client: Trainingym, want_list: dict, start_at: datetime, interval
         else:
             shown = ", ".join(f"{t['name']} {t['start']:%a %H:%M} -> {s}" for t, s in results) or "no matching class"
             log(f"[{name}] attempt {attempt} at {now_madrid():%H:%M:%S}: {shown}")
-            if not results or all(status in FINISHED for _, status in results):
+            finished = {t["id"] for t, status in results if status in FINISHED}
+            if expected_ids <= finished:
                 break
+            if not results:
+                log(f"[{name}] attempt {attempt}: the gym did not show the class, retrying")
 
         if now_madrid() + timedelta(seconds=interval) > deadline:
             break
@@ -182,6 +185,7 @@ def main():
             print("\n".join(lines))
         return
 
+    expected_ids = {t["id"] for t in targets}
     class_text = ", ".join(sorted({f"{t['name']} {t['start']:%a %d %b %H:%M}" for t in targets}))
     opens_at = min(t["opens"] for t in targets)
     start_at = max(opens_at, now_madrid())
@@ -193,7 +197,7 @@ def main():
 
     # 3. Everyone books at the same time, retrying every `interval` seconds
     with ThreadPoolExecutor(max_workers=len(clients)) as pool:
-        futures = [pool.submit(run_member, c, want_list, start_at, args.interval, deadline) for c in clients]
+        futures = [pool.submit(run_member, c, want_list, expected_ids, start_at, args.interval, deadline) for c in clients]
         outcomes = [f.result() for f in futures]
 
     # 4. Summary (stdout -> Telegram)
@@ -202,7 +206,7 @@ def main():
         if results is None:
             lines.append(f"⚠️ {name}: error, see the Actions log")
         elif not results:
-            lines.append(f"⚠️ {name}: class not found")
+            lines.append(f"⚠️ {name}: the gym never showed the class, check the app")
         else:
             for target, status in results:
                 lines.append(f"{STATUS_TEXT.get(status, status)} - {name} (class ID {target['id']})")
@@ -211,9 +215,17 @@ def main():
     # Same confirmation as before: what each member has booked now
     sleep(2)
     for client in clients:
-        client.refresh()
         print(f"\nConfirmed bookings for {client.person_fullname}:")
-        print_activities(client.next_activities())
+        for _try in range(4):
+            try:
+                client.refresh()
+                print_activities(client.next_activities(strict=True))
+                break
+            except Exception as e:
+                log(f"[{client.person_fullname}] could not read bookings ({e!r})")
+                sleep(2)
+        else:
+            print("(could not read the list, check the app)")
 
 if __name__ == "__main__":
     try:

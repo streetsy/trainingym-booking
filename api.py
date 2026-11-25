@@ -162,13 +162,20 @@ class Trainingym:
         body = {"connectionClientId":""}
         return self.query(url, method="POST", json=body)
 
-    def next_activities(self):
+    def next_activities(self, strict: bool = False):
         """ Return a list of upcoming activities. Include completed today """
         today = now_madrid()
         bookings = self.myBookings()
         activities = list()
 
-        for booking_day in (bookings or {}).get("aaData") or []:
+        if not isinstance(bookings, dict) or bookings.get("aaData") is None:
+            # A member with no bookings may legitimately get an empty reply. When booking, carry on
+            # (the schedule itself says whether the class is already booked); only the final
+            # report of bookings (strict) treats it as "could not read".
+            if strict:
+                raise RuntimeError("gym returned no bookings data")
+            bookings = {"aaData": []}
+        for booking_day in bookings["aaData"]:
             day = self.parse_date(booking_day["dateProgram"])
             if day.date() < today.date():
                 continue
@@ -198,7 +205,10 @@ class Trainingym:
         now = now_madrid()
         targets = []
 
-        for gym_day in (self.getSchedulesApp() or {}).get("calendar") or []:
+        schedule = self.getSchedulesApp()
+        if not isinstance(schedule, dict) or not schedule.get("calendar"):
+            raise RuntimeError("gym returned no schedule")
+        for gym_day in schedule["calendar"]:
             day_schedule = self.parse_date(gym_day["dateProgram"])
             dow = day_schedule.weekday()
             # si no haces clase ese día de la semana
