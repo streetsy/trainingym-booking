@@ -60,6 +60,9 @@ class Trainingym:
         self.gym = dict()
         self.session = requests.Session()
         self.dry_run = False
+        self.window_min = WINDOW_MIN_HOURS  # only classes starting this many hours from now...
+        self.window_max = WINDOW_MAX_HOURS  # ...to this many (test runs can widen it)
+        self.only_id = None     # test mode: restrict to this single class id
         self.any_class = False  # test mode: ignore clases.yaml day/name/time, take whatever is ~72h away
         self._sent = {}  # class id -> times seen "full" since we sent a booking request
 
@@ -162,13 +165,20 @@ class Trainingym:
         body = {"connectionClientId":""}
         return self.query(url, method="POST", json=body)
 
-    def next_activities(self):
+    def next_activities(self, strict: bool = False):
         """ Return a list of upcoming activities. Include completed today """
         today = now_madrid()
         bookings = self.myBookings()
         activities = list()
 
-        for booking_day in (bookings or {}).get("aaData") or []:
+        if not isinstance(bookings, dict) or bookings.get("aaData") is None:
+            # A member with no bookings may legitimately get an empty reply. When booking, carry on
+            # (the schedule itself says whether the class is already booked); only the final
+            # report of bookings (strict) treats it as "could not read".
+            if strict:
+                raise RuntimeError("gym returned no bookings data")
+            bookings = {"aaData": []}
+        for booking_day in bookings["aaData"]:
             day = self.parse_date(booking_day["dateProgram"])
             if day.date() < today.date():
                 continue
@@ -198,7 +208,10 @@ class Trainingym:
         now = now_madrid()
         targets = []
 
-        for gym_day in (self.getSchedulesApp() or {}).get("calendar") or []:
+        schedule = self.getSchedulesApp()
+        if not isinstance(schedule, dict) or not schedule.get("calendar"):
+            raise RuntimeError("gym returned no schedule")
+        for gym_day in schedule["calendar"]:
             day_schedule = self.parse_date(gym_day["dateProgram"])
             dow = day_schedule.weekday()
             # si no haces clase ese día de la semana
@@ -208,6 +221,8 @@ class Trainingym:
             time_start_since = parsed_activities.get(dow, {}).get("start_time")
             wanted_activities = parsed_activities.get(dow, {}).get("clases")
             for activity in gym_day.get("schedules") or []:
+                if self.only_id and activity["id"] != self.only_id:
+                    continue
                 time_start = self.parse_hour(activity["timeStart"]).time()
                 name = activity["activity"].get("name")
                 if not self.any_class:
@@ -218,10 +233,13 @@ class Trainingym:
 
                 start = datetime.combine(day_schedule, time_start)
                 hours_until = (start - now).total_seconds() / 3600
-                if not (WINDOW_MIN_HOURS <= hours_until <= WINDOW_MAX_HOURS):
+                if not (self.window_min <= hours_until <= self.window_max):
                     continue
 
+                info = activity.get("bookingInfo") or {}
+                capacity = activity.get("capacityAssistant")
                 targets.append({
+                    "places": None if capacity is None else capacity - info.get("bookedPlaces", 0),
                     "id": activity["id"],
                     "name": name,
                     "start": start,

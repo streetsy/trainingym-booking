@@ -53,6 +53,9 @@ def parse_arguments():
     parser.add_argument("--max-minutes", type=float, default=10, help="Stop retrying this long after booking opens (default 10)")
     parser.add_argument("--test-any-class", action="store_true", help="Test mode: consider ANY class ~72h away, ignoring clases.yaml (combine with --dry-run to only report)")
     parser.add_argument("--cancel-id", type=int, default=None, help="Cancel this class id for every member, then stop")
+    parser.add_argument("--window", default=None, help='Test only: hours-from-now window to look at, e.g. "45-55" (normal runs use 71-72.25)')
+    parser.add_argument("--list-classes", action="store_true", help="Test only: list the classes in the --window range with their ids, then stop")
+    parser.add_argument("--only-id", type=int, default=None, help="Test only: book just this one class id")
     parser.add_argument("--dry-run", action="store_true", help="Do everything except actually sending the booking")
 
     return parser.parse_args()
@@ -103,7 +106,7 @@ def wait_until(moment: datetime):
         sleep(min(remaining, 1))
 
 
-def run_member(client: Trainingym, want_list: dict, start_at: datetime, interval: int, deadline: datetime):
+def run_member(client: Trainingym, want_list: dict, expected_ids: set, start_at: datetime, interval: int, deadline: datetime):
     """
     Try to book for one member: first attempt at start_at, then one every `interval` seconds,
     until the class is booked/full or the deadline passes. Returns (name, last results or None).
@@ -128,8 +131,11 @@ def run_member(client: Trainingym, want_list: dict, start_at: datetime, interval
         else:
             shown = ", ".join(f"{t['name']} {t['start']:%a %H:%M} -> {s}" for t, s in results) or "no matching class"
             log(f"[{name}] attempt {attempt} at {now_madrid():%H:%M:%S}: {shown}")
-            if not results or all(status in FINISHED for _, status in results):
+            finished = {t["id"] for t, status in results if status in FINISHED}
+            if expected_ids <= finished:
                 break
+            if not results:
+                log(f"[{name}] attempt {attempt}: the gym did not show the class, retrying")
 
         if now_madrid() + timedelta(seconds=interval) > deadline:
             break
@@ -149,6 +155,9 @@ def main():
         client = Trainingym()
         client.dry_run = args.dry_run
         client.any_class = args.test_any_class
+        client.only_id = args.only_id
+        if args.window:
+            client.window_min, client.window_max = (float(x) for x in args.window.split("-"))
         try:
             client.login(account["email"], account["password"])
         except Exception as e:
@@ -174,14 +183,26 @@ def main():
             print_activities(client.next_activities())
         return
 
+    if args.list_classes:
+        lister = clients[0]
+        lister.any_class = True
+        found = sorted(lister.find_target_classes(want_list), key=lambda t: t["start"])
+        print(f"Classes {lister.window_min:g}-{lister.window_max:g}h away (id | start | name | places left):")
+        for t in found:
+            print(f"{t['id']} | {t['start']:%a %d %H:%M} | {t['name']} | {t['places']}")
+        if not found:
+            print("none")
+        return
+
     # 2. Work out which class has just opened, and when exactly its booking opens
     targets = clients[0].find_target_classes(want_list)
     if not targets:
-        print("No class from clases.yaml is opening for booking right now (nothing 71-72.25h away).")
+        print(f"No class from clases.yaml is opening for booking right now (nothing {clients[0].window_min:g}-{clients[0].window_max:g}h away).")
         if lines:
             print("\n".join(lines))
         return
 
+    expected_ids = {t["id"] for t in targets}
     class_text = ", ".join(sorted({f"{t['name']} {t['start']:%a %d %b %H:%M}" for t in targets}))
     opens_at = min(t["opens"] for t in targets)
     start_at = max(opens_at, now_madrid())
@@ -193,7 +214,7 @@ def main():
 
     # 3. Everyone books at the same time, retrying every `interval` seconds
     with ThreadPoolExecutor(max_workers=len(clients)) as pool:
-        futures = [pool.submit(run_member, c, want_list, start_at, args.interval, deadline) for c in clients]
+        futures = [pool.submit(run_member, c, want_list, expected_ids, start_at, args.interval, deadline) for c in clients]
         outcomes = [f.result() for f in futures]
 
     # 4. Summary (stdout -> Telegram)
@@ -202,7 +223,7 @@ def main():
         if results is None:
             lines.append(f"⚠️ {name}: error, see the Actions log")
         elif not results:
-            lines.append(f"⚠️ {name}: class not found")
+            lines.append(f"⚠️ {name}: the gym never showed the class, check the app")
         else:
             for target, status in results:
                 lines.append(f"{STATUS_TEXT.get(status, status)} - {name} (class ID {target['id']})")
@@ -211,9 +232,17 @@ def main():
     # Same confirmation as before: what each member has booked now
     sleep(2)
     for client in clients:
-        client.refresh()
         print(f"\nConfirmed bookings for {client.person_fullname}:")
-        print_activities(client.next_activities())
+        for _try in range(4):
+            try:
+                client.refresh()
+                print_activities(client.next_activities(strict=True))
+                break
+            except Exception as e:
+                log(f"[{client.person_fullname}] could not read bookings ({e!r})")
+                sleep(2)
+        else:
+            print("(could not read the list, check the app)")
 
 if __name__ == "__main__":
     try:
